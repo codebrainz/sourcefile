@@ -1,15 +1,6 @@
 #include <glib.h>
 #include "charsets.h"
 
-struct _SourceFileCharset
-{
-  gint    mib_enum;
-  gchar  *name;
-  gchar  *mime_name;
-  gchar **aliases;
-  gsize   n_aliases;
-};
-
 
 static SourceFileCharset **charset_table = NULL;
 static guint charset_table_length = 0;
@@ -86,8 +77,8 @@ source_file_init_charset_table (const gchar *filename)
 }
 
 
-static gboolean
-source_file_charset_equals (SourceFileCharset *charset, const gchar *charset_name)
+gboolean
+source_file_charset_equals (const SourceFileCharset *charset, const gchar *charset_name)
 {
   if (g_strcasecmp (charset->name, charset_name) == 0)
     return TRUE;
@@ -109,17 +100,7 @@ source_file_charset_equals (SourceFileCharset *charset, const gchar *charset_nam
 gboolean
 source_file_charset_exists (const gchar *charset_name)
 {
-  guint i;
-
-  source_file_init_charset_table (SOURCE_FILE_CHARSET_CONF);
-
-  for (i = 0; i < charset_table_length; i++)
-    {
-      if (source_file_charset_equals (charset_table[i], charset_name))
-        return TRUE;
-    }
-
-  return FALSE;
+  return source_file_lookup_charset (charset_name) != NULL;
 }
 
 
@@ -140,6 +121,21 @@ source_file_lookup_charset (const gchar *charset_name)
 }
 
 
+gchar *
+source_file_normalize_charset_name (const gchar *charset_name)
+{
+  const SourceFileCharset *charset;
+
+  if (!charset_name)
+    return NULL;
+
+  charset = source_file_lookup_charset (charset_name);
+
+  if (!charset)
+    return NULL;
+
+  return g_strdup (charset->name);
+}
 
 
 

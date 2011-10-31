@@ -6,8 +6,8 @@
 G_BEGIN_DECLS
 
 
-#define SOURCE_FILE_FALLBACK_ENCODING     "ISO-8859-1"
-#define SOURCE_FILE_CHARSET_PATTERN       \
+#define SOURCE_FILE_FALLBACK_CHARSET "ISO-8859-1"
+#define SOURCE_FILE_CHARSET_PATTERN \
   "(coding|charset|codepage)\\s*[:=]\\s*[\"']?\\s*([^'\"\\s]+)\\s*[\"']?"
 #define SOURCE_FILE_CHARSET_PATTERN_MATCH 2
 

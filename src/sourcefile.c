@@ -212,6 +212,7 @@ source_file_guess_charset (SourceFile *file, const gchar *buffer, gsize length)
   gchar      *charset = NULL;
   GMatchInfo *info;
   GError     *error;
+  const SourceFileCharset *cs;
 
   g_return_val_if_fail (SOURCE_IS_FILE (file), NULL);
   g_return_val_if_fail (buffer, NULL);
@@ -284,7 +285,15 @@ source_file_guess_charset (SourceFile *file, const gchar *buffer, gsize length)
     }
 
   if (!charset)
-    charset = g_strdup (SOURCE_FILE_FALLBACK_ENCODING);
+    charset = g_strdup (SOURCE_FILE_FALLBACK_CHARSET);
+
+  /* normalize the name */
+  cs = source_file_lookup_charset (charset);
+  if (cs)
+    {
+      g_free (charset);
+      charset = g_strdup (cs->name);
+    }
 
   return charset;
 }
@@ -629,8 +638,8 @@ source_file_save (SourceFile *file, const gchar *filename)
 const gchar *
 source_file_get_charset (SourceFile *file)
 {
-    g_return_val_if_fail (SOURCE_IS_FILE (file), NULL);
-    return (const gchar *) file->priv->charset;
+  g_return_val_if_fail (SOURCE_IS_FILE (file), NULL);
+  return (const gchar *) file->priv->charset;
 }
 
 
@@ -641,7 +650,10 @@ source_file_set_charset (SourceFile *file, const gchar  *charset)
   g_return_if_fail (charset);
 
   g_free (file->priv->charset);
-  file->priv->charset = g_strdup (charset);
+  file->priv->charset = source_file_normalize_charset_name (charset);
+
+  if (!file->priv->charset)
+    file->priv->charset = g_strdup (SOURCE_FILE_FALLBACK_CHARSET);
 }
 
 
