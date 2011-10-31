@@ -14,8 +14,6 @@
 #endif
 
 
-/* static const gchar *source_file_charsets[] = { "...", NULL }; */
-#include "sourcefile-charsets.c"
 #include "charsets.h"
 
 
@@ -33,7 +31,7 @@ struct _SourceFilePrivate
 };
 
 
-enum 
+enum
 {
   SIGNAL_EXTERNALLY_MODIFIED,
   SIGNAL_LAST
@@ -43,11 +41,10 @@ enum
 static guint source_file_signals[SIGNAL_LAST] = { 0 };
 
 
-static void      source_file_finalize             (GObject *object);
+static void     source_file_finalize             (GObject *object);
 #ifndef HAVE_UCHARDET
 static gchar   *source_file_scan_unicode_bom      (const gchar *buffer, gsize length);
 #endif
-static gboolean source_file_is_valid_charset_name (const gchar *charset_name);
 static gchar   *source_file_guess_charset         (SourceFile *file, const gchar *buffer, gsize length);
 static gchar   *source_file_guess_mime_type       (SourceFile *file, const gchar *buffer, gsize length);
 #if 0
@@ -69,7 +66,7 @@ source_file_class_init (SourceFileClass *klass)
   g_object_class = G_OBJECT_CLASS(klass);
   g_object_class->finalize = source_file_finalize;
   g_type_class_add_private((gpointer)klass, sizeof(SourceFilePrivate));
-  
+
   source_file_signals[SIGNAL_EXTERNALLY_MODIFIED] =
     g_signal_newv ("externally-modified",
                    G_TYPE_FROM_CLASS (g_object_class),
@@ -100,10 +97,10 @@ source_file_finalize (GObject *object)
   g_free (self->priv->filename);
   g_free (self->priv->buffer->data);
   g_free (self->priv->buffer);
-  
+
   if (self->priv->regex_charset)
     g_regex_unref (self->priv->regex_charset);
-  
+
   if (self->priv->file)
     g_object_unref (self->priv->file);
 
@@ -209,24 +206,6 @@ source_file_scan_unicode_bom (const gchar *buffer, gsize length)
 #endif
 
 
-static gboolean
-source_file_is_valid_charset_name (const gchar *charset_name)
-{
-  /* TODO: match still if - and _ are different */
-  const gchar **test_charset;
-
-  test_charset = source_file_charsets;
-  while (*test_charset)
-    {
-      if (g_strcasecmp (*test_charset, charset_name) == 0)
-        return TRUE;
-      test_charset++;
-    }
-
-  return FALSE;
-}
-
-
 static gchar *
 source_file_guess_charset (SourceFile *file, const gchar *buffer, gsize length)
 {
@@ -265,7 +244,7 @@ source_file_guess_charset (SourceFile *file, const gchar *buffer, gsize length)
    * need to make sure it's a real charset name */
   if (charset)
     {
-      if (!source_file_is_valid_charset_name (charset))
+      if (!source_file_charset_exists (charset))
         {
           g_warning ("Detected charset name '%s' is not known so "
                      "is not being used", charset);
@@ -332,7 +311,7 @@ source_file_guess_mime_type (SourceFile *file, const gchar *buffer, gsize length
     {
       gchar    *content_type;
       gboolean  result_uncertain;
-      
+
       content_type = g_content_type_guess (file->priv->filename,
                                            (const guchar *) buffer,
                                            length,
@@ -340,7 +319,7 @@ source_file_guess_mime_type (SourceFile *file, const gchar *buffer, gsize length
 
       if (!result_uncertain)
         mime_type = g_content_type_get_mime_type (content_type);
-        
+
       g_free (content_type);
     }
 
@@ -726,14 +705,14 @@ on_file_monitor_changed (GFileMonitor      *monitor,
                          SourceFile        *file)
 {
   g_return_if_fail (SOURCE_IS_FILE (file));
-  
+
   switch (event_type)
     {
     case G_FILE_MONITOR_EVENT_CHANGED:
     case G_FILE_MONITOR_EVENT_CHANGES_DONE_HINT:
     case G_FILE_MONITOR_EVENT_DELETED:
     case G_FILE_MONITOR_EVENT_MOVED:
-      g_debug ("File '%s' was externally modified", 
+      g_debug ("File '%s' was externally modified",
                source_file_get_filename (file));
       g_signal_emit_by_name (file, "externally-modified");
       break;
@@ -749,42 +728,42 @@ source_file_set_filename (SourceFile *file, const gchar  *filename)
 {
   g_return_if_fail (SOURCE_IS_FILE (file));
   g_return_if_fail (filename);
-  
+
   if (g_strcmp0 (filename, file->priv->filename) == 0)
     return;
-  
+
   g_free (file->priv->filename);
   file->priv->filename = g_strdup (filename);
-  
+
   if (file->priv->file)
     g_object_unref (file->priv->file);
 
   if (file->priv->file_monitor)
     g_object_unref (file->priv->file_monitor);
-  
+
   if (g_file_test (filename, G_FILE_TEST_EXISTS))
     {
       file->priv->file = g_file_new_for_path (filename);
-      
+
       if (G_IS_FILE (file->priv->file))
         {
-          file->priv->file_monitor = 
+          file->priv->file_monitor =
             g_file_monitor_file (file->priv->file,
                                  G_FILE_MONITOR_SEND_MOVED,
                                  NULL,
                                  NULL);
-          
-          
+
+
           if (G_IS_FILE_MONITOR (file->priv->file_monitor))
             {
-              file->priv->file_handler_id = 
+              file->priv->file_handler_id =
                 g_signal_connect (file->priv->file_monitor,
                                   "changed",
                                   G_CALLBACK (on_file_monitor_changed),
                                   file);
             }
         }
-    }  
+    }
 }
 
 

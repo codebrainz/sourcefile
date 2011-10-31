@@ -6,7 +6,7 @@ CC				= gcc
 SF_CFLAGS	= -g -Wall -Werror \
 							`pkg-config --cflags glib-2.0 gio-2.0 uchardet` \
 							-DHAVE_UCHARDET -DHAVE_MAGIC \
-							-DSOURCE_FILE_CHARSET_CONF="\"/home/codebrainz/projects/sourcefile/data/charsets.conf\""
+							-DSOURCE_FILE_CHARSET_CONF="\"data/charsets.conf\""
 SF_LIBS		= `pkg-config --libs glib-2.0 gio-2.0` -lmagic
 
 all: libsourcefile.so
