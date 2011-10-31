@@ -14,6 +14,11 @@
 #endif
 
 
+/* static const gchar *source_file_charsets[] = { "...", NULL }; */
+#include "sourcefile-charsets.c"
+#include "charsets.h"
+
+
 struct _SourceFilePrivate
 {
   gchar            *filename;
@@ -22,10 +27,35 @@ struct _SourceFilePrivate
   SourceFileBuffer *buffer;
   gboolean          externally_modified;
   GRegex           *regex_charset;
+  GFile            *file;
+  GFileMonitor     *file_monitor;
+  guint             file_handler_id;
 };
 
 
-static void source_file_finalize (GObject *object);
+enum 
+{
+  SIGNAL_EXTERNALLY_MODIFIED,
+  SIGNAL_LAST
+};
+
+
+static guint source_file_signals[SIGNAL_LAST] = { 0 };
+
+
+static void      source_file_finalize             (GObject *object);
+#ifndef HAVE_UCHARDET
+static gchar   *source_file_scan_unicode_bom      (const gchar *buffer, gsize length);
+#endif
+static gboolean source_file_is_valid_charset_name (const gchar *charset_name);
+static gchar   *source_file_guess_charset         (SourceFile *file, const gchar *buffer, gsize length);
+static gchar   *source_file_guess_mime_type       (SourceFile *file, const gchar *buffer, gsize length);
+#if 0
+static SourceFileLineEnding
+                source_file_guess_line_endings    (SourceFile *file);
+#endif
+static gboolean source_file_store_buffer          (SourceFile *file);
+static gboolean source_file_load_buffer           (SourceFile *file);
 
 
 G_DEFINE_TYPE(SourceFile, source_file, G_TYPE_OBJECT)
@@ -39,6 +69,18 @@ source_file_class_init (SourceFileClass *klass)
   g_object_class = G_OBJECT_CLASS(klass);
   g_object_class->finalize = source_file_finalize;
   g_type_class_add_private((gpointer)klass, sizeof(SourceFilePrivate));
+  
+  source_file_signals[SIGNAL_EXTERNALLY_MODIFIED] =
+    g_signal_newv ("externally-modified",
+                   G_TYPE_FROM_CLASS (g_object_class),
+                   G_SIGNAL_RUN_LAST | G_SIGNAL_NO_RECURSE | G_SIGNAL_NO_HOOKS,
+                   NULL,
+                   NULL,
+                   NULL,
+                   g_cclosure_marshal_VOID__VOID,
+                   G_TYPE_NONE,
+                   0,
+                   NULL);
 }
 
 
@@ -58,7 +100,12 @@ source_file_finalize (GObject *object)
   g_free (self->priv->filename);
   g_free (self->priv->buffer->data);
   g_free (self->priv->buffer);
-  g_regex_unref (self->priv->regex_charset);
+  
+  if (self->priv->regex_charset)
+    g_regex_unref (self->priv->regex_charset);
+  
+  if (self->priv->file)
+    g_object_unref (self->priv->file);
 
   G_OBJECT_CLASS(source_file_parent_class)->finalize(object);
 }
@@ -73,13 +120,16 @@ static void source_file_init(SourceFile *self)
                                             SourceFilePrivate);
 
   /* set defaults */
-  self->priv->charset        = NULL;
-  self->priv->mime_type      = NULL;
-  self->priv->filename       = NULL;
-  self->priv->buffer         = g_new0 (SourceFileBuffer, 1);
-  self->priv->buffer->data   = NULL;
-  self->priv->buffer->length = 0;
+  self->priv->charset         = NULL;
+  self->priv->mime_type       = NULL;
+  self->priv->filename        = NULL;
+  self->priv->buffer          = g_new0 (SourceFileBuffer, 1);
+  self->priv->buffer->data    = NULL;
+  self->priv->buffer->length  = 0;
+  self->priv->file            = NULL;
+  self->priv->file_handler_id = 0;
 
+  /* pre-compile regular expression(s) */
   error = NULL;
   self->priv->regex_charset = g_regex_new (SOURCE_FILE_CHARSET_PATTERN,
                                            G_REGEX_CASELESS,
@@ -159,7 +209,6 @@ source_file_scan_unicode_bom (const gchar *buffer, gsize length)
 #endif
 
 
-#include "sourcefile-charsets.c"
 static gboolean
 source_file_is_valid_charset_name (const gchar *charset_name)
 {
@@ -197,7 +246,7 @@ source_file_guess_charset (SourceFile *file, const gchar *buffer, gsize length)
                           0, 0, &info, &error))
     {
       charset = g_match_info_fetch (info, SOURCE_FILE_CHARSET_PATTERN_MATCH);
-      if (!charset || !strlen (charset) == 1)
+      if (!charset || strlen (charset) == 1)
         {
           g_free (charset);
           charset = NULL;
@@ -265,35 +314,35 @@ source_file_guess_charset (SourceFile *file, const gchar *buffer, gsize length)
 static gchar *
 source_file_guess_mime_type (SourceFile *file, const gchar *buffer, gsize length)
 {
-  gchar       *content_type;
-  gchar       *mime_type = NULL;
-  gboolean     result_uncertain;
+  gchar *mime_type = NULL;
 
-  content_type = g_content_type_guess (file->priv->filename,
-                                       (const guchar *) buffer,
-                                       length,
-                                       &result_uncertain);
-
-  if (!result_uncertain)
-    mime_type = g_content_type_get_mime_type (content_type);
-  else
-    {
 #ifdef HAVE_MAGIC
-      const gchar *mbuf;
-      magic_t      cookie;
+  const gchar *mbuf;
+  magic_t      cookie;
 
-      cookie = magic_open (MAGIC_MIME_TYPE);
-      mbuf = magic_buffer (cookie, buffer, length);
-      if (mbuf)
-        mime_type = g_strdup (mbuf);
+  cookie = magic_open (MAGIC_MIME_TYPE);
+  mbuf = magic_buffer (cookie, buffer, length);
+  if (mbuf)
+    mime_type = g_strdup (mbuf);
 
-      magic_close (cookie);
-#else
-      /* use SOURCE_FILE_FILETYPE_PATTERN regex */
+  magic_close (cookie);
 #endif
-    }
 
-  g_free (content_type);
+  if (!mime_type)
+    {
+      gchar    *content_type;
+      gboolean  result_uncertain;
+      
+      content_type = g_content_type_guess (file->priv->filename,
+                                           (const guchar *) buffer,
+                                           length,
+                                           &result_uncertain);
+
+      if (!result_uncertain)
+        mime_type = g_content_type_get_mime_type (content_type);
+        
+      g_free (content_type);
+    }
 
   return mime_type;
 }
@@ -488,19 +537,13 @@ source_file_new (const gchar *filename, const gchar *charset, const gchar *mime_
   file = SOURCE_FILE (g_object_new (SOURCE_TYPE_FILE, NULL));
 
   if (filename)
-    file->priv->filename = g_strdup (filename);
+    source_file_set_filename (file, filename);
 
   if (charset)
-    {
-      g_free (file->priv->charset);
-      file->priv->charset = g_strdup (charset);
-    }
+    source_file_set_charset (file, charset);
 
   if (mime_type)
-    {
-      g_free (file->priv->mime_type);
-      file->priv->mime_type = g_strdup (charset);
-    }
+    source_file_set_mime_type (file, mime_type);
 
   if (filename)
     source_file_load_buffer (file);
@@ -574,26 +617,19 @@ source_file_open (SourceFile  *file,
   g_return_val_if_fail (SOURCE_IS_FILE (file), FALSE);
   g_return_val_if_fail (filename, FALSE);
 
-  g_free (file->priv->filename);
-  file->priv->filename = g_strdup (filename);
+  source_file_set_filename (file, filename);
 
   g_free (file->priv->charset);
   file->priv->charset = NULL;
 
   if (charset)
-    {
-      g_free (file->priv->charset);
-      file->priv->charset = g_strdup (charset);
-    }
+    file->priv->charset = g_strdup (charset);
 
   g_free (file->priv->mime_type);
   file->priv->mime_type = NULL;
 
   if (mime_type)
-    {
-      g_free (file->priv->mime_type);
-      file->priv->mime_type = g_strdup (mime_type);
-    }
+    file->priv->mime_type = g_strdup (mime_type);
 
   return source_file_load_buffer (file);
 }
@@ -605,10 +641,7 @@ source_file_save (SourceFile *file, const gchar *filename)
   g_return_val_if_fail (SOURCE_IS_FILE (file), FALSE);
 
   if (filename)
-    {
-      g_free (file->priv->filename);
-      file->priv->filename = g_strdup (filename);
-    }
+    source_file_set_filename (file, filename);
 
   return source_file_store_buffer (file);
 }
@@ -685,11 +718,102 @@ source_file_get_extension (SourceFile *file)
 }
 
 
+static void
+on_file_monitor_changed (GFileMonitor      *monitor,
+                         GFile             *gfile,
+                         GFile             *other_file,
+                         GFileMonitorEvent  event_type,
+                         SourceFile        *file)
+{
+  g_return_if_fail (SOURCE_IS_FILE (file));
+  
+  switch (event_type)
+    {
+    case G_FILE_MONITOR_EVENT_CHANGED:
+    case G_FILE_MONITOR_EVENT_CHANGES_DONE_HINT:
+    case G_FILE_MONITOR_EVENT_DELETED:
+    case G_FILE_MONITOR_EVENT_MOVED:
+      g_debug ("File '%s' was externally modified", 
+               source_file_get_filename (file));
+      g_signal_emit_by_name (file, "externally-modified");
+      break;
+    /* skip others */
+    default:
+      break;
+    }
+}
+
+
 void
 source_file_set_filename (SourceFile *file, const gchar  *filename)
 {
   g_return_if_fail (SOURCE_IS_FILE (file));
   g_return_if_fail (filename);
+  
+  if (g_strcmp0 (filename, file->priv->filename) == 0)
+    return;
+  
   g_free (file->priv->filename);
   file->priv->filename = g_strdup (filename);
+  
+  if (file->priv->file)
+    g_object_unref (file->priv->file);
+
+  if (file->priv->file_monitor)
+    g_object_unref (file->priv->file_monitor);
+  
+  if (g_file_test (filename, G_FILE_TEST_EXISTS))
+    {
+      file->priv->file = g_file_new_for_path (filename);
+      
+      if (G_IS_FILE (file->priv->file))
+        {
+          file->priv->file_monitor = 
+            g_file_monitor_file (file->priv->file,
+                                 G_FILE_MONITOR_SEND_MOVED,
+                                 NULL,
+                                 NULL);
+          
+          
+          if (G_IS_FILE_MONITOR (file->priv->file_monitor))
+            {
+              file->priv->file_handler_id = 
+                g_signal_connect (file->priv->file_monitor,
+                                  "changed",
+                                  G_CALLBACK (on_file_monitor_changed),
+                                  file);
+            }
+        }
+    }  
 }
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
